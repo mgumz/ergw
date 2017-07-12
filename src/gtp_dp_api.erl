@@ -40,3 +40,8 @@
 
 -callback get_accounting(Context :: #context{}) ->
     Return :: term().
+
+-callback activate_pcc_rules(Context :: #context{},
+			     UL :: [binary()],
+			     DL :: [binary()]) ->
+    Return :: term().
