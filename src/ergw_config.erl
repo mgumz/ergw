@@ -190,6 +190,8 @@ validate_sockets_option(Opt, Values)
 	    gtp_socket:validate_options(Values);
 	'gtp-u' ->
 	    gtp_dp:validate_options(Values);
+	'api' ->
+	    Values;
 	_ ->
 	    throw({error, {options, {Opt, Values}}})
     end;

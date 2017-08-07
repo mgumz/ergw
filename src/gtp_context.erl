@@ -7,6 +7,8 @@
 
 -module(gtp_context).
 
+-behavior(gen_server).
+
 -compile({parse_transform, cut}).
 -compile({parse_transform, do}).
 
@@ -20,7 +22,7 @@
 	 remote_context_register/1, remote_context_register_new/1, remote_context_update/2,
 	 enforce_restrictions/2,
 	 info/1,
-	 apply_session_policy/4,
+	 apply_session_policy/3,
 	 validate_options/3,
 	 validate_option/2]).
 
@@ -184,11 +186,8 @@ info(Context) ->
 enforce_restrictions(Msg, #context{restrictions = Restrictions} = Context) ->
     lists:foreach(fun(R) -> enforce_restriction(Context, Msg, R) end, Restrictions).
 
-apply_session_policy(GroupName, SessionOpts, Context, State)
-  when is_atom(GroupName) ->
-    apply_session_policy(atom_to_binary(GroupName, utf8), SessionOpts, Context, State);
-apply_session_policy(GroupName, SessionOpts, Context, #{rules := Groups}) ->
-    GroupSpec = maps:get('PCC-Groups', SessionOpts, [GroupName]),
+apply_session_policy(SessionOpts, Context, #{rules := Groups}) ->
+    GroupSpec = maps:get('PCC-Groups', SessionOpts, []),
     RuleSpec = maps:get('PCC-Rules', SessionOpts, []),
     {UL0, DL0} = lists:unzip(lists:map(maps:get(_, Groups, {[], []}), GroupSpec)),
     UL = lists:usort(lists:flatten(UL0) ++ RuleSpec),

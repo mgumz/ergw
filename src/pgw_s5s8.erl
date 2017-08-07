@@ -21,13 +21,18 @@
 -export([init_session/3, init_session_from_gtp_req/3]).
 
 -include_lib("gtplib/include/gtp_packet.hrl").
+-include_lib("diameter/include/diameter_gen_base_rfc6733.hrl").
+-include_lib("ergw_aaa/include/diameter_3gpp_ts29_212.hrl").
 -include("include/ergw.hrl").
+-include("include/3gpp.hrl").
 
 -import(ergw_aaa_session, [to_session/1]).
 
 -define(GTP_v1_Interface, ggsn_gn).
 -define(T3, 10 * 1000).
 -define(N3, 5).
+
+-define(DIAMETER_APP_ID_GX, diameter_3gpp_ts29_212:id()).
 
 %%====================================================================
 %% API
@@ -165,7 +170,8 @@ handle_request(_ReqKey,
 				   }}
 			  } = IEs} = Request,
 	       _Resent,
-	       #{context := Context0, aaa_opts := AAAopts, 'Session' := Session} = State) ->
+	       #{context := Context0, aaa_opts := AAAopts,
+		 'Session' := Session} = State0) ->
 
     PAA = maps:get(?'PDN Address Allocation', IEs, undefined),
 
@@ -183,14 +189,15 @@ handle_request(_ReqKey,
     {ContextVRF, VRFOpts} = select_vrf(ContextPreAuth),
 
     ActiveSessionOpts0 = ergw_aaa_session:get(Session),
-    ActiveSessionOpts = apply_vrf_session_defaults(VRFOpts, ActiveSessionOpts0),
-    lager:info("ActiveSessionOpts: ~p", [ActiveSessionOpts]),
+    ActiveSessionOpts1 = apply_vrf_session_defaults(VRFOpts, ActiveSessionOpts0),
+    lager:info("ActiveSessionOpts: ~p", [ActiveSessionOpts1]),
 
-    ContextPending = assign_ips(ActiveSessionOpts, PAA, ContextVRF),
+    ContextPending = assign_ips(ActiveSessionOpts1, PAA, ContextVRF),
+    {ActiveSessionOpts, State} = diameter_gx(Request, ActiveSessionOpts1, ContextPending, State0),
 
     gtp_context:remote_context_register_new(ContextPending),
     Context = dp_create_pdp_context(ContextPending),
-    gtp_context:apply_session_policy(online, ActiveSessionOpts, Context, State),
+    gtp_context:apply_session_policy(ActiveSessionOpts, Context, State),
 
     ResponseIEs = create_session_response(ActiveSessionOpts, IEs, EBI, Context),
     Response = response(create_session_response, Context, ResponseIEs, Request),
@@ -485,10 +492,11 @@ encode_paa(Type, IPv4, IPv6) ->
 pdn_release_ip(#context{vrf = VRF, ms_v4 = MSv4, ms_v6 = MSv6}) ->
     vrf:release_pdp_ip(VRF, MSv4, MSv6).
 
-close_pdn_context(#{context := Context, 'Session' := Session}) ->
+close_pdn_context(#{context := Context, 'Session' := Session} = State) ->
     SessionOpts = get_accounting(Context),
     lager:debug("Accounting Opts: ~p", [SessionOpts]),
     ergw_aaa_session:stop(Session, SessionOpts),
+    diameter_gx(delete_session, SessionOpts, Context, State),
 
     dp_delete_pdp_context(Context),
     pdn_release_ip(Context).
@@ -554,7 +562,8 @@ init_session(IEs,
       'Password'		=> Password,
       'Service-Type'		=> 'Framed-User',
       'Framed-Protocol'		=> 'GPRS-PDP-Context',
-      '3GPP-GGSN-Address'	=> LocalIP
+      '3GPP-GGSN-Address'	=> LocalIP,
+      'PCC-Groups'              => [<<"default">>]
      }.
 
 copy_optional_binary_ie('3GPP-SGSN-Address' = Key, IP, Session) 
@@ -872,3 +881,188 @@ create_session_response(SessionOpts, RequestIEs, EBI,
      #v2_apn_restriction{restriction_type_value = 0},
      s5s8_pgw_gtp_c_tei(Context),
      encode_paa(MSv4, MSv6) | IE1].
+
+%%%===================================================================
+%%% DIAMETER functions
+%%%===================================================================
+
+gx_request(Type, #{sid := SId, cc_req := Req} = State0) ->
+    Avps = #{'Session-Id'          => SId,
+	     'Auth-Application-Id' => ?DIAMETER_APP_ID_GX,
+	     'CC-Request-Type'     => Type,
+	     'CC-Request-Number'   => Req,
+	     'IP-CAN-Type'         => [?'DIAMETER_GX_IP-CAN-TYPE_3GPP-EPS']
+	    },
+    State = State0#{cc_req => Req + 1},
+    {Avps, State}.
+
+diameter_gx(Request, SessionOpts0, Context, State0) ->
+    State1 = State0#{
+	       sid    => diameter:session_id("erGW"),
+	       cc_req => 0
+	      },
+    DiamReqType =
+	case Request of
+	    #gtp{type = create_session_request} ->
+		?'DIAMETER_GX_CC-REQUEST-TYPE_INITIAL_REQUEST';
+	    delete_session ->
+		?'DIAMETER_GX_CC-REQUEST-TYPE_TERMINATION_REQUEST'
+	end,
+    {Avps0, State} = gx_request(DiamReqType, State1),
+    Avps1 = gx_gtp_req(Request, Avps0),
+    Avps2 = gx_context(Context, Avps1),
+    Avps = gx_session(SessionOpts0, Avps2),
+    lager:warning("Avps: ~p", [Avps]),
+
+    DiamReq = ['CCR' | to_list(Avps)],
+    case ergw_aaa_gx:call(DiamReq) of
+	{ok, {'CCA', CCA}} ->
+	    case get_result_code(CCA) of
+		?'DIAMETER_BASE_RESULT-CODE_SUCCESS' ->
+		    SessionOpts = cca2session(CCA, SessionOpts0),
+		    {SessionOpts, State}
+	    end;
+
+	Other ->
+	    lager:error("Unexpected DIAMETER Gx result: ~p", [Other]),
+	    {SessionOpts0, State}
+    end.
+
+get_result_code(#{'Experimental-Result' :=
+		      #{'Vendor-Id' := ?VENDOR_ID_3GPP,
+			'Experimental-Result-Code' := Code}}) ->
+    Code;
+get_result_code(#{'Result-Code' := Code}) ->
+    Code;
+get_result_code(_) ->
+    ?'DIAMETER_BASE_RESULT-CODE_UNABLE_TO_COMPLY'.
+
+rat_type(1) -> ?'DIAMETER_GX_RAT-TYPE_UTRAN';			%% UTRAN
+rat_type(2) -> ?'DIAMETER_GX_RAT-TYPE_GERAN';			%% GERAN
+rat_type(3) -> ?'DIAMETER_GX_RAT-TYPE_WLAN';			%% WLAN
+rat_type(4) -> ?'DIAMETER_GX_RAT-TYPE_GAN';			%% GAN
+rat_type(5) -> ?'DIAMETER_GX_RAT-TYPE_HSPA_EVOLUTION';		%% HSPA Evolution
+rat_type(6) -> ?'DIAMETER_GX_RAT-TYPE_EUTRAN';			%% E-UTRAN
+rat_type(0) -> ?'DIAMETER_GX_RAT-TYPE_VIRTUAL'.			%% VIRTUAL
+
+repeated(Key, Value, Avps) ->
+    maps:update_with(Key, fun(V) -> [Value|V] end, [Value], Avps).
+
+%% choice(B, True, _False)
+%%   when B == true; B == 1 ->
+%%     True;
+%% choice(_, _True, False) ->
+%%     False.
+
+framed_ip(Key, {IP,_}, Avps) ->
+    Avps#{Key => [[gtp_c_lib:ip2bin(IP)]]};
+framed_ip(_Key, _, Avps) ->
+    Avps.
+
+bin2hex(Bin) ->
+    [ io_lib:format("~2.16.0B", [X]) || <<X>> <= Bin ].
+
+gx_gtp_req(?'MSISDN', #v2_msisdn{msisdn = MSISDN}, Avps) ->
+    SI = #{'Subscription-Id-Type' => ?'DIAMETER_GX_SUBSCRIPTION-ID-TYPE_END_USER_E164',
+	   'Subscription-Id-Data' => MSISDN},
+    repeated('Subscription-Id', SI, Avps);
+gx_gtp_req({v2_user_location_information, 0},
+	   #v2_user_location_information{rai = RAI}, Avps) when RAI /= undefined ->
+    Avps#{'RAI' => [bin2hex(RAI)]};
+gx_gtp_req(_K, _V, Avps) ->
+    lager:warning("GTP Req: ~p : ~p", [_K, _V]),
+    Avps.
+
+gx_gtp_req(#gtp{ie = IEs}, Avps) ->
+    maps:fold(fun gx_gtp_req/3, Avps, IEs);
+gx_gtp_req(_, Avps) ->
+    Avps.
+
+gx_context(#context{control_port = #gtp_port{ip = LocalIP},
+		    ms_v4 = MSv4, ms_v6 = MSv6}, Avps0) ->
+    Avps1 = framed_ip('Framed-IP-Address', MSv4, Avps0),
+    Avps2 = framed_ip('Framed-IPv6-Prefix', MSv6, Avps1),
+    Avps2#{'3GPP-GGSN-Address' => [gtp_c_lib:ip2bin(LocalIP)]}.
+
+gx_session('APN', APN, Avps) ->
+    Avps#{'Called-Station-Id' => [APN]};
+gx_session('3GPP-IMSI', IMSI, Avps) ->
+    SI = #{'Subscription-Id-Type' => ?'DIAMETER_GX_SUBSCRIPTION-ID-TYPE_END_USER_IMSI',
+	   'Subscription-Id-Data' => IMSI},
+    repeated('Subscription-Id', SI, Avps);
+gx_session('3GPP-SGSN-Address', IP, Avps) ->
+    Avps#{'3GPP-SGSN-Address' => [IP]};
+gx_session('3GPP-Selection-Mode', Mode, Avps) ->
+    Avps#{'3GPP-Selection-Mode' => [integer_to_list(Mode)]};
+gx_session('3GPP-Charging-Characteristics', Value, Avps) ->
+    Avps#{'3GPP-Charging-Characteristics' => [Value]};
+gx_session('3GPP-SGSN-MCC-MNC', MCCMNC, Avps) ->
+    Avps#{'3GPP-SGSN-MCC-MNC' => [MCCMNC]};
+gx_session('3GPP-RAT-Type', Type, Avps) ->
+    Avps#{'RAT-Type' => [rat_type(Type)],
+	  '3GPP-RAT-Type' => [<<Type>>]};
+gx_session('3GPP-IMEISV', IMEI, Avps) ->
+    UE = #{'User-Equipment-Info-Type' =>
+	       ?'DIAMETER_GX_USER-EQUIPMENT-INFO-TYPE_IMEISV',
+	   'User-Equipment-Info-Value' => IMEI},
+    Avps#{'User-Equipment-Info' => [UE]};
+gx_session('3GPP-User-Location-Info', Value, Avps) ->
+    Avps#{'3GPP-User-Location-Info' => [Value]};
+gx_session('3GPP-MS-TimeZone', {TZ, DST}, Avps) ->
+    Avps#{'3GPP-MS-TimeZone' => [<<TZ:8, DST:8>>]};
+
+gx_session('PCC-Rules', _V, Avps) ->
+    lager:error("PCC-Rules: ~p", [_V]),
+    Avps;
+gx_session('PCC-Groups', _V, Avps) ->
+    lager:error("PCC-Groups: ~p", [_V]),
+    Avps;
+
+gx_session(_K, _V, Avps) ->
+    Avps.
+
+gx_session(Session, Avps) ->
+    maps:fold(fun gx_session/3, Avps, Session).
+
+rule_action(install, Key, Rule, Session) ->
+    maps:update_with(Key, fun(V) -> [Rule|V] end, [Rule], Session);
+rule_action(remove, Key, Rule, Session) ->
+    maps:update_with(Key, fun(V) -> lists:delete(Rule, V) end, [], Session).
+
+rule_to_session(Action, 'Charging-Rule-Base-Name', Bases, Session)
+  when is_list(Bases) ->
+    lists:foldl(rule_action(Action, 'PCC-Groups', _, _), Session, Bases);
+rule_to_session(Action, 'Charging-Rule-Base-Name', Base, Session)
+  when is_binary(Base) ->
+    rule_action(Action, 'PCC-Groups', Base, Session);
+
+rule_to_session(Action, 'Charging-Rule-Name', Bases, Session)
+  when is_list(Bases) ->
+    lists:foldl(rule_action(Action, 'PCC-Rules', _, _), Session, Bases);
+rule_to_session(Action, 'Charging-Rule-Name', Base, Session)
+  when is_binary(Base) ->
+    rule_action(Action, 'PCC-Rules', Base, Session);
+rule_to_session(_, _, _, Session) ->
+    Session.
+
+rule_to_session(Action, Values, Session) ->
+    maps:fold(rule_to_session(Action, _, _, _), Session, Values).
+
+to_session('Charging-Rule-Install', Value, Session) ->
+    lists:foldl(rule_to_session(install, _, _), Session, Value);
+to_session('Charging-Rule-Remove', Value, Session) ->
+    lists:foldl(rule_to_session(remove, _, _), Session, Value);
+to_session(_, _, Session) ->
+    Session.
+
+cca2session(CCA, Session) ->
+    maps:fold(fun to_session/3, Session, CCA).
+
+to_list({Key, [A | _] = Avps}) when is_map(A) ->
+    {Key, lists:map(fun to_list/1, Avps)};
+to_list({Key, Avps}) when is_map(Avps) ->
+    {Key, lists:map(fun to_list/1, maps:to_list(Avps))};
+to_list(Avps) when is_map(Avps) ->
+    lists:map(fun to_list/1, maps:to_list(Avps));
+to_list(Avp) ->
+    Avp.
