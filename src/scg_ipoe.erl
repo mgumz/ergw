@@ -13,7 +13,7 @@
 	  {parse_transform, cut}]).
 
 %% API
--export([validate_options/1, context_new/3]).
+-export([validate_options/1, context_new/3, lookup/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -42,6 +42,10 @@ validate_option(Opt, Value) ->
 context_new(PortName, MSv4, MSv6) ->
     {ok, ?MODULE, InterfaceOpts} = ergw:handler(PortName, ipoe),
     gen_server:start_link(?MODULE, [PortName, MSv4, MSv6, InterfaceOpts], [{debug, [trace, log]}]).
+
+lookup(PortName, {{_,_,_,_},_} = MSv4) ->
+    TEID = ms2int(MSv4),
+    gtp_context_reg:lookup_teid(PortName, 'gtp-c', TEID).
 
 %% ===================================================================
 %% gen_server callbacks

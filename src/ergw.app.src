@@ -5,7 +5,7 @@
     {applications, [kernel, stdlib, lager, erlando, crypto,
 		    regine, gen_socket, gtplib, ergw_aaa,
 		    setup, exometer_core, netdata, cowboy,
-		    diameter, compiler, os_mon, jobs]},
+		    diameter, compiler, os_mon, jobs, dhcp]},
     {mod, {ergw_app, []}},
     {registered, []}
 ]}.

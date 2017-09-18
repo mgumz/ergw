@@ -38,6 +38,8 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 lookup_key(#gtp_port{name = Name}, Key) ->
+    lookup_key(Name, Key);
+lookup_key(Name, Key) ->
     RegKey = {Name, Key},
     case ets:lookup(?SERVER, RegKey) of
 	[{RegKey, Pid}] ->
