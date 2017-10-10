@@ -42,6 +42,7 @@ load_config(Config0) ->
     lists:foreach(fun load_vrf/1, proplists:get_value(vrfs, Config)),
     lists:foreach(fun load_apn/1, proplists:get_value(apns, Config)),
     ergw_http_api:init(),
+    ergw_trace:start_tracer(Config),
     ok.
 
 opts_fold(Fun, AccIn, Opts) when is_list(Opts) ->
@@ -133,6 +134,9 @@ validate_option(plmn_id, {MCC, MNC} = Value) ->
        _  -> throw({error, {options, {plmn_id, Value}}})
     end;
 validate_option(accept_new, Value) when is_boolean(Value) ->
+    Value;
+validate_option('trace-file', Value)
+  when is_binary(Value); is_list(Value) ->
     Value;
 validate_option(dp_handler, Value) when is_atom(Value) ->
     try
