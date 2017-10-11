@@ -41,7 +41,7 @@
   1},
  {<<"gen_socket">>,
   {git,"git://github.com/travelping/gen_socket",
-       {ref,"c155d2007f1fbd350e663780849e4feba26b8083"}},
+       {ref,"072a6306b88a2f8e754e180d87e958e7c88a22d5"}},
   0},
  {<<"goldrush">>,{pkg,<<"goldrush">>,<<"0.1.9">>},1},
  {<<"gtplib">>,
