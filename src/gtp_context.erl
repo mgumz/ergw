@@ -192,7 +192,7 @@ apply_session_policy(SessionOpts, Context, #{rules := Groups}) ->
     {UL0, DL0} = lists:unzip(lists:map(maps:get(_, Groups, {[], []}), GroupSpec)),
     UL = lists:usort(lists:flatten(UL0) ++ RuleSpec),
     DL = lists:usort(lists:flatten(DL0) ++ RuleSpec),
-    gtp_dp:activate_pcc_rules(Context, UL, DL).
+    gtp_dp:activate_pcc_rules(Context, UL, DL, []).
 
 %%%===================================================================
 %%% Options Validation

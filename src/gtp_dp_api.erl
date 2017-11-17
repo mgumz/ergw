@@ -43,5 +43,6 @@
 
 -callback activate_pcc_rules(Context :: #context{},
 			     UL :: [binary()],
-			     DL :: [binary()]) ->
+			     DL :: [binary()],
+			     URR :: list()) ->
     Return :: term().

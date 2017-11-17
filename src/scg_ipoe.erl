@@ -19,8 +19,10 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+-include_lib("diameter/include/diameter_gen_base_rfc6733.hrl").
 -include_lib("ergw_aaa/include/diameter_3gpp_ts29_212.hrl").
 -include("include/ergw.hrl").
+-include("include/3gpp.hrl").
 
 -import(ergw_aaa_session, [to_session/1]).
 
@@ -96,11 +98,11 @@ handle_call(get_accounting, _From, #{context := Context} = State) ->
 
 handle_call(terminate_context, _From, State) ->
     close_pdn_context(State),
-    {stop, normal, ok, State};
+    {stop, normal, ok, State}.
 
-handle_call({activate_pcc_rules, UL, DL}, _From, #{context := Context} = State) ->
-    gtp_dp:activate_pcc_rules(Context, UL, DL),
-    {reply, ok, State}.
+%% handle_call({activate_pcc_rules, UL, DL}, _From, #{context := Context} = State) ->
+%%     gtp_dp:activate_pcc_rules(Context, UL, DL),
+%%     {reply, ok, State}.
 
 handle_cast(start, #{context := ContextPending, aaa_opts := AAAopts,
 		    'Session' := Session} = State0) ->
@@ -235,26 +237,6 @@ dp_delete_pdp_context(Context) ->
 %%% DIAMETER functions
 %%%===================================================================
 
-gx_request(Type, #{sid := SId, cc_req := Req} = State0) ->
-    Avps = #{'Session-Id'          => SId,
-	     'Auth-Application-Id' => ?DIAMETER_APP_ID_GX,
-	     'CC-Request-Type'     => Type,
-	     'CC-Request-Number'   => Req},
-    State = State0#{cc_req => Req + 1},
-    {Avps, State}.
-
-diameter_gx(ActiveSessionOpts, Context, State0) ->
-    State1 = State0#{
-	       sid    => diameter:session_id("erGW"),
-	       cc_req => 0
-	      },
-    {Avps0, State} = gx_request(?'DIAMETER_GX_CC-REQUEST-TYPE_INITIAL_REQUEST', State1),
-    Avps1 = gx_context(Context, Avps0),
-    Avps2 = gx_session(ActiveSessionOpts, Avps1),
-    lager:warning("Avps: ~p", [Avps2]),
-
-    {ActiveSessionOpts, State}.
-
 gx_context(_Context, Avps) ->
     Avps.
 
@@ -264,3 +246,90 @@ gx_session(_K, _V, Avps) ->
 gx_session(Session, Avps) ->
     maps:fold(fun gx_session/3, Avps, Session).
 
+gx_request(Type, #{sid := SId, cc_req := Req} = State0) ->
+    Avps = #{'Session-Id'          => SId,
+	     'Auth-Application-Id' => ?DIAMETER_APP_ID_GX,
+	     'CC-Request-Type'     => Type,
+	     'CC-Request-Number'   => Req,
+	     'IP-CAN-Type'         => [?'DIAMETER_GX_IP-CAN-TYPE_NON-3GPP-EPS'],
+	     'RAT-Type'            => [?'DIAMETER_GX_RAT-TYPE_VIRTUAL']
+	    },
+    State = State0#{cc_req => Req + 1},
+    {Avps, State}.
+
+diameter_gx(SessionOpts0, Context, State0) ->
+    State1 = State0#{
+	       sid    => diameter:session_id("erGW"),
+	       cc_req => 0
+	      },
+    {Avps0, State} = gx_request(?'DIAMETER_GX_CC-REQUEST-TYPE_INITIAL_REQUEST', State1),
+    Avps1 = gx_context(Context, Avps0),
+    Avps = gx_session(SessionOpts0, Avps1),
+    lager:warning("Avps: ~p", [Avps]),
+
+    DiamReq = ['CCR' | to_list(Avps)],
+    case ergw_aaa_gx:call(DiamReq) of
+	{ok, {'CCA', CCA}} ->
+	    case get_result_code(CCA) of
+		?'DIAMETER_BASE_RESULT-CODE_SUCCESS' ->
+		    SessionOpts = cca2session(CCA, SessionOpts0),
+		    lager:warning("SessionOpts: ~p", [SessionOpts]),
+		    {SessionOpts, State}
+	    end;
+
+	Other ->
+	    lager:error("Unexpected DIAMETER Gx result: ~p", [Other]),
+	    {SessionOpts0, State}
+    end.
+
+get_result_code(#{'Experimental-Result' :=
+		      #{'Vendor-Id' := ?VENDOR_ID_3GPP,
+			'Experimental-Result-Code' := Code}}) ->
+    Code;
+get_result_code(#{'Result-Code' := Code}) ->
+    Code;
+get_result_code(_) ->
+    ?'DIAMETER_BASE_RESULT-CODE_UNABLE_TO_COMPLY'.
+
+rule_action(install, Key, Rule, Session) ->
+    maps:update_with(Key, fun(V) -> [Rule|V] end, [Rule], Session);
+rule_action(remove, Key, Rule, Session) ->
+    maps:update_with(Key, fun(V) -> lists:delete(Rule, V) end, [], Session).
+
+rule_to_session(Action, 'Charging-Rule-Base-Name', Bases, Session)
+  when is_list(Bases) ->
+    lists:foldl(rule_action(Action, 'PCC-Groups', _, _), Session, Bases);
+rule_to_session(Action, 'Charging-Rule-Base-Name', Base, Session)
+  when is_binary(Base) ->
+    rule_action(Action, 'PCC-Groups', Base, Session);
+
+rule_to_session(Action, 'Charging-Rule-Name', Bases, Session)
+  when is_list(Bases) ->
+    lists:foldl(rule_action(Action, 'PCC-Rules', _, _), Session, Bases);
+rule_to_session(Action, 'Charging-Rule-Name', Base, Session)
+  when is_binary(Base) ->
+    rule_action(Action, 'PCC-Rules', Base, Session);
+rule_to_session(_, _, _, Session) ->
+    Session.
+
+rule_to_session(Action, Values, Session) ->
+    maps:fold(rule_to_session(Action, _, _, _), Session, Values).
+
+to_session('Charging-Rule-Install', Value, Session) ->
+    lists:foldl(rule_to_session(install, _, _), Session, Value);
+to_session('Charging-Rule-Remove', Value, Session) ->
+    lists:foldl(rule_to_session(remove, _, _), Session, Value);
+to_session(_, _, Session) ->
+    Session.
+
+cca2session(CCA, Session) ->
+    maps:fold(fun to_session/3, Session, CCA).
+
+to_list({Key, [A | _] = Avps}) when is_map(A) ->
+    {Key, lists:map(fun to_list/1, Avps)};
+to_list({Key, Avps}) when is_map(Avps) ->
+    {Key, lists:map(fun to_list/1, maps:to_list(Avps))};
+to_list(Avps) when is_map(Avps) ->
+    lists:map(fun to_list/1, maps:to_list(Avps));
+to_list(Avp) ->
+    Avp.
