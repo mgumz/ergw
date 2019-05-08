@@ -144,15 +144,7 @@ all() ->
 init_per_testcase(Config) ->
     meck_reset(Config).
 init_per_testcase(http_api_delete_sessions, Config) ->
-    % ok = meck:expect(ergw_gtp_socket, send_request,
-		     % fun(GtpPort, DstIP, DstPort, _T3, _N3,
-			 % #gtp{type = delete_pdp_context_request} = Msg, CbInfo) ->
-			     % %% reduce timeout to 1 second and 2 resends
-			     % %% to speed up the test
-			     % meck:passthrough([GtpPort, DstIP, DstPort, 1000, 2, Msg, CbInfo]);
-			% (GtpPort, DstIP, DstPort, T3, N3, Msg, CbInfo) ->
-			     % meck:passthrough([GtpPort, DstIP, DstPort, T3, N3, Msg, CbInfo])
-		     % end),
+    ct:pal("Sockets: ~p", [ergw_gtp_socket_reg:all()]),
     ergw_test_sx_up:reset('pgw-u'),
     meck_reset(Config),
     start_gtpc_server(Config),
@@ -161,11 +153,12 @@ init_per_testcase(_, Config) ->
     init_per_testcase(Config),
     Config.
 
-end_per_testcase(http_api_session_stop, Config) ->
-    ok = meck:delete(ergw_gtp_socket, send_request, 7),
+end_per_testcase(http_api_session_delete, Config) ->
+    stop_gtpc_server(),
     Config;
 end_per_testcase(_, Config) ->
     Config.
+
 init_per_suite(Config0) ->
     inets:start(),
     Config1 = [{app_cfg, ?TEST_CONFIG},
@@ -340,16 +333,12 @@ http_api_metrics_sub_req(_Config) ->
 http_api_delete_sessions() ->
     [{doc, "Check DELETE /sessions/count API"}].
 http_api_delete_sessions(Config) ->
-    % Create session and request it
-    lists:foreach(
-    fun(_) ->
-	lib_init_per_suite(Config),
-
-	ergw_test_sx_up:reset('pgw-u'),
-	meck_reset(Config),
-	S = start_gtpc_server(Config),
-	{_GtpC1, _, _} = create_pdp_context(S)
-      end, lists:duplicate(20, 1)),
+    
+    % N contexts:
+    % lists:foreach(fun(_) -> create_pdp_context(Config) end, lists:seq(1, 20)),
+    
+    % 1 context for testing
+    create_pdp_context(Config),
 
     Res1 = json_http_request(delete, "/sessions/0"),
     ?match(#{<<"TotalCount">> := 1}, Res1),

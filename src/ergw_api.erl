@@ -25,9 +25,9 @@ peer(Port) when is_atom(Port) ->
     collect_peer_info(gtp_path_reg:all(Port)).
 
 delete_random_contexts(Count) ->
-    Peers = gtp_context_reg:all(),
-    RPeers = shuffle(Peers),
-    delete_random_contexts(RPeers, Count).
+    Ctx = gtp_context_reg:all(),
+    RCtx = shuffle(Ctx),
+    delete_random_contexts(RCtx, Count).
 
 tunnel(all) ->
     Contexts = lists:usort([Pid || {{_Socket, {teid, 'gtp-c', _TEID}}, {_, Pid}}
