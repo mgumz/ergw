@@ -9,7 +9,7 @@
 
 -export([init/2, content_types_provided/2,
          handle_request_json/2, handle_request_text/2,
-         allowed_methods/2,
+         allowed_methods/2, delete_resource/2,
          content_types_accepted/2]).
 
 -define(FIELDS_MAPPING, [{accept_new, 'acceptNewRequests'},
@@ -28,6 +28,11 @@ content_types_provided(Req, State) ->
 
 content_types_accepted(Req, State) ->
     {[{'*', handle_request_json}], Req, State}.
+
+delete_resource(Req, State) ->
+    Path = cowboy_req:path(Req),
+    Method = cowboy_req:method(Req),
+    handle_request(Method, Path, json, Req, State).
 
 handle_request_json(Req, State) ->
     Path = cowboy_req:path(Req),
@@ -98,7 +103,7 @@ handle_request(<<"DELETE">>, <<"/api/v1/sessions/", _/binary>>, json, Req, State
     case catch binary_to_integer(Value) of
               Count when is_integer(Count), Count > 0 ->
                   Res = ergw_api:delete_random_contexts(Count),
-                  Response = jsx:encode(#{sessions => Res}),
+                  Response = jsx:encode(#{sessions => [Res]}),
                   Req2 = cowboy_req:set_resp_body(Response, Req),
                   {true, Req2, State};
               _ ->
