@@ -19,7 +19,7 @@ init(Req, Opts) ->
     {cowboy_rest, Req, Opts}.
 
 allowed_methods(Req, State) ->
-    {[<<"GET">>, <<"POST">>], Req, State}.
+    {[<<"GET">>, <<"POST">>, <<"DELETE">>], Req, State}.
 
 content_types_provided(Req, State) ->
     {[{<<"application/json">>, handle_request_json},
