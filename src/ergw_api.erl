@@ -8,7 +8,7 @@
 -module(ergw_api).
 
 %% API
--export([peer/1, tunnel/1, delete_random_contexts/1]).
+-export([peer/1, tunnel/1, contexts/1, delete_contexts/1]).
 
 %%%===================================================================
 %%% API
@@ -24,21 +24,25 @@ peer({_,_,_,_,_,_,_,_} = IP) ->
 peer(Port) when is_atom(Port) ->
     collect_peer_info(gtp_path_reg:all(Port)).
 
-delete_random_contexts(Count) ->
-    Ctx = gtp_context_reg:all(),
-    RCtx = shuffle(Ctx),
-    delete_random_contexts(RCtx, Count).
-
 tunnel(all) ->
-    Contexts = lists:usort([Pid || {{_Socket, {teid, 'gtp-c', _TEID}}, {_, Pid}}
-				       <- gtp_context_reg:all(), is_pid(Pid)]),
-    lists:foldl(fun collect_contexts/2, [], Contexts);
+    lists:foldl(fun collect_contexts/2, [], contexts(all));
 tunnel({_,_,_,_} = IP) ->
     lists:foldl(fun collext_path_contexts/2, [], gtp_path_reg:all(IP));
 tunnel({_,_,_,_,_,_,_,_} = IP) ->
     lists:foldl(fun collext_path_contexts/2, [], gtp_path_reg:all(IP));
 tunnel(Port) when is_atom(Port) ->
     lists:foldl(fun collext_path_contexts/2, [], gtp_path_reg:all(Port)).
+
+contexts(all) ->
+    lists:usort([Pid || {{_Socket, {teid, 'gtp-c', _TEID}}, {_, Pid}}
+				       <- gtp_context_reg:all(), is_pid(Pid)]).
+
+delete_contexts(Count) ->
+    Contexts = contexts(all),
+    Count0 = erlang:min(erlang:length(Contexts), Count),
+    Contexts0 = lists:sublist(Contexts, Count0),
+    lists:foreach(fun(Pid) -> gtp_context:delete_contexts(Pid) end, Contexts0).
+
 
 %%%===================================================================
 %%% Internal functions
@@ -56,15 +60,3 @@ collect_contexts(Context, Tunnels) ->
     io:format("Context: ~p~n", [Context]),
     Info = gtp_context:info(Context),
     [Info#{'Process' => Context} | Tunnels].
-
-shuffle(List) ->
-    [Y || {_, Y} <- lists:sort([ {rand:uniform(), El} || El <- List])].
-
-delete_random_contexts([], Count) -> {error, Count};
-delete_random_contexts(_, 0) -> ok;
-delete_random_contexts([{{_, {Id, _, _}}, {gtp_context, Pid}} | Tail], Count)
-  when (Id == imsi) orelse (Id == imei), is_pid(Pid) ->
-    gtp_context:delete_context(Pid),
-    delete_random_contexts(Tail, Count - 1);
-delete_random_contexts([_ | Tail], Count) ->
-    delete_random_contexts(Tail, Count).

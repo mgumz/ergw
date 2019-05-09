@@ -98,16 +98,17 @@ handle_request(<<"POST">>, _, json, Req, State) ->
             {true, Req2, State}
     end;
 
-handle_request(<<"DELETE">>, <<"/api/v1/sessions/", _/binary>>, json, Req, State) ->
+handle_request(<<"DELETE">>, <<"/api/v1/contexts/", _/binary>>, json, Req, State) ->
     Value = cowboy_req:binding(count, Req),
     case catch binary_to_integer(Value) of
-              Count when is_integer(Count), Count > 0 ->
-                  Res = ergw_api:delete_random_contexts(Count),
-                  Response = jsx:encode(#{sessions => [Res]}),
-                  Req2 = cowboy_req:set_resp_body(Response, Req),
-                  {true, Req2, State};
-              _ ->
-                  {false, Req, State}
+	Count when is_integer(Count), Count > 0 ->
+	    ok = ergw_api:delete_contexts(Count),
+	    Contexts = ergw_api:contexts(all),
+	    Response = jsx:encode(#{contexts => erlang:length(Contexts)}),
+	    Req2 = cowboy_req:set_resp_body(Response, Req),
+	    {true, Req2, State};
+	_ ->
+	    {false, Req, State}
     end;
 handle_request(_, _, Req, _, State) ->
     {false, Req, State}.
