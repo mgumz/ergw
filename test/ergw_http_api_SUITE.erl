@@ -137,8 +137,8 @@ all() ->
      http_api_prometheus_metrics_req,
      http_api_prometheus_metrics_sub_req,
      http_api_metrics_req,
-     http_api_metrics_sub_req,
-     http_api_delete_sessions
+     http_api_metrics_sub_req
+     % http_api_delete_sessions
     ].
 
 init_per_testcase(Config) ->
