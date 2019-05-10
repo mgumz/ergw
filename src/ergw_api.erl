@@ -41,7 +41,7 @@ delete_contexts(Count) ->
     Contexts = contexts(all),
     Count0 = erlang:min(erlang:length(Contexts), Count),
     Contexts0 = lists:sublist(Contexts, Count0),
-    lists:foreach(fun(Pid) -> gtp_context:delete_contexts(Pid) end, Contexts0).
+    lists:foreach(fun(Pid) -> gtp_context:delete_context(Pid) end, Contexts0).
 
 
 %%%===================================================================
