@@ -331,27 +331,11 @@ http_api_metrics_sub_req(_Config) ->
     ok.
 
 http_api_delete_sessions() ->
-    [{doc, "Check DELETE /sessions/count API"}].
+    [{doc, "Check DELETE /contexts/count API"}].
 http_api_delete_sessions(Config) ->
+    Res1 = json_http_request(delete, "/contexts/0"),
+    ?match(#{<<"contexts">> := 0}, Res1),
     
-    % N contexts:
-    % lists:foreach(fun(_) -> create_pdp_context(Config) end, lists:seq(1, 20)),
-    
-    % 1 context for testing
-    create_pdp_context(Config),
-
-    Res1 = json_http_request(delete, "/sessions/0"),
-    ?match(#{<<"TotalCount">> := 1}, Res1),
-
-    Res2 = json_http_request(delete, "/sessions/5"),
-    ?match(#{<<"TotalCount">> := 1}, Res2),
-
-    Res3 = json_http_request(delete, "/sessions/15"),
-    ?match(#{<<"TotalCount">> := 1}, Res3),
-
-    Res4 = json_http_request(delete, "/sessions/2"),
-    ?match(#{<<"TotalCount">> := 1}, Res4),
-
     ok = meck:wait(ggsn_gn, terminate, '_', 2000),
     wait4tunnels(2000),
     meck_validate(Config),

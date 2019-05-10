@@ -38,10 +38,8 @@ contexts(all) ->
 				       <- gtp_context_reg:all(), is_pid(Pid)]).
 
 delete_contexts(Count) ->
-    Contexts = contexts(all),
-    Count0 = erlang:min(erlang:length(Contexts), Count),
-    Contexts0 = lists:sublist(Contexts, Count0),
-    lists:foreach(fun(Pid) -> gtp_context:delete_context(Pid) end, Contexts0).
+    Contexts = lists:sublist(contexts(all), Count),
+    lists:foreach(fun(Pid) -> gtp_context:delete_context(Pid) end, Contexts).
 
 
 %%%===================================================================
